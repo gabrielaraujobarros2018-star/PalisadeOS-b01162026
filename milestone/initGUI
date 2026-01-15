@@ -1,0 +1,105 @@
+#include <stdint.h>
+#include <stddef.h>
+
+#define GUI_MAX_WIDTH   1920
+#define GUI_MAX_HEIGHT  1080
+
+struct fb_info {
+    uint32_t *addr;
+    uint32_t width;
+    uint32_t height;
+    uint32_t pitch;
+};
+
+struct gui_color {
+    uint8_t r, g, b, a;
+};
+
+static struct fb_info fb;
+static struct gui_color bg = { 20, 20, 24, 255 };
+static struct gui_color fg = { 220, 220, 220, 255 };
+static struct gui_color accent = { 80, 160, 255, 255 };
+
+static inline uint32_t pack(struct gui_color c) {
+    return (c.a << 24) | (c.r << 16) | (c.g << 8) | c.b;
+}
+
+static void fb_putpixel(uint32_t x, uint32_t y, struct gui_color c) {
+    if (x >= fb.width || y >= fb.height) return;
+    fb.addr[y * (fb.pitch / 4) + x] = pack(c);
+}
+
+static void fb_clear(struct gui_color c) {
+    for (uint32_t y = 0; y < fb.height; y++) {
+        for (uint32_t x = 0; x < fb.width; x++) {
+            fb_putpixel(x, y, c);
+        }
+    }
+}
+
+static void draw_rect(uint32_t x, uint32_t y,
+                      uint32_t w, uint32_t h,
+                      struct gui_color c) {
+    for (uint32_t iy = 0; iy < h; iy++) {
+        for (uint32_t ix = 0; ix < w; ix++) {
+            fb_putpixel(x + ix, y + iy, c);
+        }
+    }
+}
+
+static void draw_progress(uint32_t percent) {
+    uint32_t bar_w = fb.width / 2;
+    uint32_t bar_h = 18;
+    uint32_t x = (fb.width - bar_w) / 2;
+    uint32_t y = fb.height - 80;
+
+    draw_rect(x, y, bar_w, bar_h, (struct gui_color){50,50,55,255});
+
+    uint32_t fill = (bar_w * percent) / 100;
+    draw_rect(x, y, fill, bar_h, accent);
+}
+
+static void draw_logo(void) {
+    uint32_t cx = fb.width / 2;
+    uint32_t cy = fb.height / 3;
+    uint32_t r = 42;
+
+    for (int y = -r; y <= r; y++) {
+        for (int x = -r; x <= r; x++) {
+            if ((x * x + y * y) <= (r * r)) {
+                fb_putpixel(cx + x, cy + y, accent);
+            }
+        }
+    }
+}
+
+static void gui_frame(uint32_t step) {
+    fb_clear(bg);
+    draw_logo();
+    draw_progress(step);
+}
+
+void initGUI(uint32_t *fb_addr,
+             uint32_t width,
+             uint32_t height,
+             uint32_t pitch) {
+
+    fb.addr = fb_addr;
+    fb.width = width;
+    fb.height = height;
+    fb.pitch = pitch;
+
+    if (!fb.addr || width == 0 || height == 0) {
+        return;
+    }
+
+    for (uint32_t i = 0; i <= 100; i += 10) {
+        gui_frame(i);
+
+        for (volatile uint32_t d = 0; d < 3000000; d++) {
+            __asm__ volatile ("nop");
+        }
+    }
+
+    fb_clear(bg);
+}

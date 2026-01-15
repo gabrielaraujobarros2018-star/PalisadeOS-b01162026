@@ -1,0 +1,144 @@
+#include <stdint.h>
+#include <stddef.h>
+
+#define UHS_MAX_ROWS 60
+#define UHS_MAX_COLS 120
+#define UHS_COLOR_DEFAULT 0x07
+#define UHS_COLOR_WARN    0x0E
+#define UHS_COLOR_ERROR   0x0C
+
+struct uhs_cell {
+    char ch;
+    uint8_t color;
+};
+
+struct uhs_buffer {
+    struct uhs_cell cells[UHS_MAX_ROWS][UHS_MAX_COLS];
+    uint32_t rows;
+    uint32_t cols;
+};
+
+static struct uhs_buffer uhs;
+static uint32_t cursor_x = 0;
+static uint32_t cursor_y = 0;
+static uint8_t current_color = UHS_COLOR_DEFAULT;
+
+static inline void io_out8(uint16_t port, uint8_t val) {
+    __asm__ volatile ("outb %0, %1" :: "a"(val), "Nd"(port));
+}
+
+static void uhs_hw_cursor(uint16_t pos) {
+    io_out8(0x3D4, 0x0F);
+    io_out8(0x3D5, (uint8_t)(pos & 0xFF));
+    io_out8(0x3D4, 0x0E);
+    io_out8(0x3D5, (uint8_t)((pos >> 8) & 0xFF));
+}
+
+static void uhs_scroll(void) {
+    for (uint32_t y = 1; y < uhs.rows; y++) {
+        for (uint32_t x = 0; x < uhs.cols; x++) {
+            uhs.cells[y - 1][x] = uhs.cells[y][x];
+        }
+    }
+    for (uint32_t x = 0; x < uhs.cols; x++) {
+        uhs.cells[uhs.rows - 1][x].ch = ' ';
+        uhs.cells[uhs.rows - 1][x].color = current_color;
+    }
+    if (cursor_y > 0) cursor_y--;
+}
+
+static void uhs_putc(char c) {
+    if (c == '\n') {
+        cursor_x = 0;
+        cursor_y++;
+        if (cursor_y >= uhs.rows) uhs_scroll();
+        return;
+    }
+
+    if (cursor_x >= uhs.cols) {
+        cursor_x = 0;
+        cursor_y++;
+    }
+
+    if (cursor_y >= uhs.rows) {
+        uhs_scroll();
+    }
+
+    uhs.cells[cursor_y][cursor_x].ch = c;
+    uhs.cells[cursor_y][cursor_x].color = current_color;
+    cursor_x++;
+}
+
+static void uhs_write(const char *s) {
+    while (*s) {
+        uhs_putc(*s++);
+    }
+}
+
+static void uhs_clear(void) {
+    for (uint32_t y = 0; y < uhs.rows; y++) {
+        for (uint32_t x = 0; x < uhs.cols; x++) {
+            uhs.cells[y][x].ch = ' ';
+            uhs.cells[y][x].color = current_color;
+        }
+    }
+    cursor_x = 0;
+    cursor_y = 0;
+}
+
+static void uhs_flush_to_vga(void) {
+    volatile uint16_t *vga = (uint16_t *)0xB8000;
+    uint32_t idx = 0;
+
+    for (uint32_t y = 0; y < uhs.rows; y++) {
+        for (uint32_t x = 0; x < uhs.cols; x++) {
+            struct uhs_cell *c = &uhs.cells[y][x];
+            vga[idx++] = ((uint16_t)c->color << 8) | (uint8_t)c->ch;
+        }
+    }
+
+    uhs_hw_cursor(cursor_y * uhs.cols + cursor_x);
+}
+
+static void uhs_banner(void) {
+    current_color = UHS_COLOR_WARN;
+    uhs_write("PalisadeOS Bootloader\n");
+    current_color = UHS_COLOR_DEFAULT;
+    uhs_write("UHSUI: ultra-high-stability text interface\n");
+}
+
+static void uhs_status(const char *msg) {
+    current_color = UHS_COLOR_DEFAULT;
+    uhs_write("[ OK ] ");
+    uhs_write(msg);
+    uhs_putc('\n');
+}
+
+static void uhs_error(const char *msg) {
+    current_color = UHS_COLOR_ERROR;
+    uhs_write("[FAIL] ");
+    uhs_write(msg);
+    uhs_putc('\n');
+    current_color = UHS_COLOR_DEFAULT;
+}
+
+void initUHSUI(void) {
+    uhs.rows = 25;
+    uhs.cols = 80;
+    current_color = UHS_COLOR_DEFAULT;
+
+    uhs_clear();
+    uhs_banner();
+
+    uhs_status("Text buffer initialized");
+    uhs_status("VGA fallback path active");
+    uhs_status("Scrolling enabled");
+
+    for (int i = 0; i < 3; i++) {
+        uhs_write("Boot step ");
+        uhs_putc('0' + i);
+        uhs_putc('\n');
+    }
+
+    uhs_flush_to_vga();
+}
